@@ -32,6 +32,7 @@ def parse_arguments():
                             'opt-2.7b', 'opt-6.7b', 'flan-t5-xl', 'flan-t5-xxl',
                             'llava', 'vila', 'nougat', 'cogvlm', 'fuyu',
                             'pix2struct', 'neva', 'kosmos-2', 'video-neva'
+                            'internlm-xcomposer2-vl-7b'
                         ],
                         help="Model type")
     parser.add_argument(
@@ -74,6 +75,8 @@ class VisionEngineBuilder:
         args = self.args
         if 'opt' in args.model_type or 't5' in args.model_type:
             build_blip2_engine(args)
+        elif args.model_type == 'internlm-xcomposer2-vl-7b':
+            build_interlm_xcomposer2_engine(args)
         elif args.model_type == 'pix2struct':
             build_pix2struct_engine(args)
         elif args.model_type == 'llava':
@@ -239,6 +242,35 @@ def build_blip2_engine(args):
         args.output_dir,
         args.max_batch_size)
 
+def build_interlm_xcomposer2_engine(args):
+    model_type = 'internlm/' + args.model_type
+
+    model = AutoModel.from_pretrained(model_type,
+                                      trust_remote_code=True).to(torch.float16)
+
+    raw_image = Image.new('RGB', [10, 10])
+    image = model.vis_processor(raw_image).unsqueeze(0).to(
+        args.device, torch.float16)
+
+    class InternLMXComposer2VisionWrapper(torch.nn.Module):
+
+        def __init__(self, vision_model, vision_proj):
+            super().__init__()
+            self.vision_model = vision_model
+            self.vision_proj = vision_proj
+
+        def forward(self, image):
+            return self.vision_proj(self.vision_model(image))
+
+    wrapper = InternLMXComposer2VisionWrapper(model.vit, model.vision_proj)
+    wrapper.to(args.device)
+
+    export_visual_wrapper_onnx(wrapper, image, args.output_dir)
+    build_trt_engine(
+        model_type,
+        [image.shape[1], image.shape[2], image.shape[3]],  # [3, H, W]
+        args.output_dir,
+        args.max_batch_size)
 
 def build_pix2struct_engine(args):
     processor = AutoProcessor.from_pretrained(args.model_path)

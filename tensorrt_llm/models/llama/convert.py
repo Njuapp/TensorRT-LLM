@@ -694,12 +694,89 @@ def load_weights_from_hf_model(hf_model,
     mha_mode = (config.num_key_value_heads == config.num_attention_heads)
     layers_range = config.mapping.pp_layers(config.num_hidden_layers)
 
+    if config.has_partial_lora_rank == True:
+        lora_weights = {}
+        is_xcomposer = True
+        tllm_to_hf_weight_map = {
+            'attention.dense': 'attention.wo',
+            'mlp.gate': 'feed_forward.w3',
+            'mlp.fc': 'feed_forward.w1',
+            'mlp.proj': 'feed_forward.w2',
+            'input_layernorm': 'attention_norm',
+            'post_layernorm': 'ffn_norm',
+            'transformer.vocab_embedding': 'model.tok_embeddings',
+            'lm_head': 'output'
+        }
+    else:
+        is_xcomposer = False
+        tllm_to_hf_weight_map = {
+            'attention.dense': 'self_attn.o_proj',
+            'mlp.gate': 'mlp.up_proj',
+            'mlp.fc': 'mlp.gate_proj',
+            'mlp.proj': 'mlp.down_proj',
+            'input_layernorm': 'input_layernorm',
+            'post_layernorm': 'post_attention_layernorm',
+            'transformer.vocab_embedding': 'model.embed_tokens',
+            'lm_head': 'lm_head'
+        }
+
     def convert_layer(l):
         prefix = f'model.layers.{l}.'
         tllm_prex = f'transformer.layers.{l - layers_range[0]}.'
-        q_weight = get_weight(model_params, prefix + 'self_attn.q_proj', dtype)
-        k_weight = get_weight(model_params, prefix + 'self_attn.k_proj', dtype)
-        v_weight = get_weight(model_params, prefix + 'self_attn.v_proj', dtype)
+
+        if is_xcomposer:
+            lora_prefix = f'base_model.model.model.layers.{l}'
+            assert config.num_attention_heads % config.num_key_value_heads == 0
+            num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+
+            qkv_loraA = get_weight(model_params,
+                                   prefix + 'attention.wqkv.Plora_A', dtype)
+            qkv_loraB = get_weight(model_params,
+                                   prefix + 'attention.wqkv.Plora_B', dtype)
+            q_lora_name = f"{lora_prefix}.self_attn.q_proj"
+            k_lora_name = f"{lora_prefix}.self_attn.k_proj"
+            v_lora_name = f"{lora_prefix}.self_attn.v_proj"
+
+            lora_weights[f"{q_lora_name}.lora_A.weight"] = qkv_loraA
+            lora_weights[f"{k_lora_name}.lora_A.weight"] = qkv_loraA
+            lora_weights[f"{v_lora_name}.lora_A.weight"] = qkv_loraA
+
+            qkv_lora_rank = qkv_loraB.shape[-1]
+
+            qkv_loraB = qkv_loraB.reshape(config.num_key_value_heads, num_key_value_groups + 2,
+                                          -1, qkv_lora_rank)
+            q_loraB = qkv_loraB[:, :num_key_value_groups, :, :].reshape(
+                -1, qkv_lora_rank).contiguous()
+            k_loraB = qkv_loraB[:,
+                                -2, :, :].reshape(-1,
+                                                  qkv_lora_rank).contiguous()
+            v_loraB = qkv_loraB[:,
+                                -1, :, :].reshape(-1,
+                                                  qkv_lora_rank).contiguous()
+
+            lora_weights[f"{q_lora_name}.lora_B.weight"] = q_loraB
+            lora_weights[f"{k_lora_name}.lora_B.weight"] = k_loraB
+            lora_weights[f"{v_lora_name}.lora_B.weight"] = v_loraB
+
+            qkv_weight = get_weight(model_params, prefix + 'attention.wqkv',
+                                    dtype)
+            qkv_weight = qkv_weight.reshape(config.num_key_value_heads, num_key_value_groups + 2,
+                                            -1, config.hidden_size)
+            q_weight = qkv_weight[:, :num_key_value_groups, :, :].reshape(
+                -1, config.hidden_size).contiguous()
+            k_weight = qkv_weight[:,
+                                  -2, :, :].reshape(-1,
+                                                    config.hidden_size).contiguous()
+            v_weight = qkv_weight[:,
+                                  -1, :, :].reshape(-1,
+                                                    config.hidden_size).contiguous()
+        else:
+            q_weight = get_weight(model_params, prefix + 'self_attn.q_proj',
+                                  dtype)
+            k_weight = get_weight(model_params, prefix + 'self_attn.k_proj',
+                                  dtype)
+            v_weight = get_weight(model_params, prefix + 'self_attn.v_proj',
+                                  dtype)
 
         if not mha_mode:
             if config.num_key_value_heads < mapping.tp_size:
@@ -800,8 +877,20 @@ def load_weights_from_hf_model(hf_model,
 
             weights.update(kv_cache_weights)
 
-        attn_dense_weight = get_weight(model_params,
-                                       prefix + 'self_attn.o_proj', dtype)
+        attn_dense_weight = get_weight(
+            model_params, prefix + tllm_to_hf_weight_map['attention.dense'],
+            dtype)
+        if is_xcomposer:
+            wo_loraA = get_weight(model_params, prefix + 'attention.wo.Plora_A',
+                                  dtype)
+            wo_loraB = get_weight(model_params, prefix + 'attention.wo.Plora_B',
+                                  dtype)
+            print('wo lora shape:', wo_loraA.shape, wo_loraB.shape)
+
+            lora_weights[
+                f"{lora_prefix}.self_attn.o_proj.lora_A.weight"] = wo_loraA
+            lora_weights[
+                f"{lora_prefix}.self_attn.o_proj.lora_B.weight"] = wo_loraB
         split_v = split_matrix_tp(attn_dense_weight,
                                   mapping.tp_size,
                                   mapping.tp_rank,
@@ -1003,8 +1092,19 @@ def load_weights_from_hf_model(hf_model,
                     dtype,
                     use_gemm_woq_plugin))
         else:
-            mlp_gate_weight = get_weight(model_params, prefix + 'mlp.up_proj',
-                                         dtype)
+            mlp_gate_weight = get_weight(
+                model_params, prefix + tllm_to_hf_weight_map['mlp.gate'], dtype)
+            if is_xcomposer:
+                mlp_gate_loraA = get_weight(model_params,
+                                            prefix + 'feed_forward.w3.Plora_A',
+                                            dtype)
+                mlp_gate_loraB = get_weight(model_params,
+                                            prefix + 'feed_forward.w3.Plora_B',
+                                            dtype)
+                lora_weights[
+                    f"{lora_prefix}.mlp.up_proj.lora_A.weight"] = mlp_gate_loraA
+                lora_weights[
+                    f"{lora_prefix}.mlp.up_proj.lora_B.weight"] = mlp_gate_loraB
             split_v = split_matrix_tp(mlp_gate_weight,
                                       mapping.tp_size,
                                       mapping.tp_rank,
@@ -1035,8 +1135,20 @@ def load_weights_from_hf_model(hf_model,
                                            plugin_weight_only_quant_type, dtype,
                                            use_gemm_woq_plugin))
 
-            mlp_fc_weight = get_weight(model_params, prefix + 'mlp.gate_proj',
+            mlp_fc_weight = get_weight(model_params,
+                                       prefix + tllm_to_hf_weight_map['mlp.fc'],
                                        dtype)
+            if is_xcomposer:
+                mlp_fc_loraA = get_weight(model_params,
+                                          prefix + 'feed_forward.w1.Plora_A',
+                                          dtype)
+                mlp_fc_loraB = get_weight(model_params,
+                                          prefix + 'feed_forward.w1.Plora_B',
+                                          dtype)
+                lora_weights[
+                    f"{lora_prefix}.mlp.gate_proj.lora_A.weight"] = mlp_fc_loraA
+                lora_weights[
+                    f"{lora_prefix}.mlp.gate_proj.lora_B.weight"] = mlp_fc_loraB
             split_v = split_matrix_tp(mlp_fc_weight,
                                       mapping.tp_size,
                                       mapping.tp_rank,
@@ -1067,8 +1179,19 @@ def load_weights_from_hf_model(hf_model,
                                            plugin_weight_only_quant_type, dtype,
                                            use_gemm_woq_plugin))
 
-            mlp_proj_weight = get_weight(model_params, prefix + 'mlp.down_proj',
-                                         dtype)
+            mlp_proj_weight = get_weight(
+                model_params, prefix + tllm_to_hf_weight_map['mlp.proj'], dtype)
+            if is_xcomposer:
+                mlp_proj_loraA = get_weight(model_params,
+                                            prefix + 'feed_forward.w2.Plora_A',
+                                            dtype)
+                mlp_proj_loraB = get_weight(model_params,
+                                            prefix + 'feed_forward.w2.Plora_B',
+                                            dtype)
+                lora_weights[
+                    f"{lora_prefix}.mlp.down_proj.lora_A.weight"] = mlp_proj_loraA
+                lora_weights[
+                    f"{lora_prefix}.mlp.down_proj.lora_B.weight"] = mlp_proj_loraB
             split_v = split_matrix_tp(mlp_proj_weight,
                                       mapping.tp_size,
                                       mapping.tp_rank,
@@ -1102,12 +1225,14 @@ def load_weights_from_hf_model(hf_model,
                                            use_gemm_woq_plugin))
 
         # Layer norms do not use tensor parallelism
-        input_ln_weight = get_weight(model_params, prefix + 'input_layernorm',
-                                     dtype)
+        input_ln_weight = get_weight(
+            model_params, prefix + tllm_to_hf_weight_map['input_layernorm'],
+            dtype)
         weights[tllm_prex + 'input_layernorm.weight'] = input_ln_weight
 
-        post_ln_weight = get_weight(model_params,
-                                    prefix + 'post_attention_layernorm', dtype)
+        post_ln_weight = get_weight(
+            model_params, prefix + tllm_to_hf_weight_map['post_layernorm'],
+            dtype)
         weights[tllm_prex + 'post_layernorm.weight'] = post_ln_weight
 
         if config.residual_mlp:
@@ -1128,7 +1253,11 @@ def load_weights_from_hf_model(hf_model,
         convert_layer(l)
         release_gc()
 
-    v = get_weight(model_params, 'model.embed_tokens', dtype)
+    if is_xcomposer:
+        torch.save(lora_weights, 'adapter_model.bin')
+
+    v = get_weight(model_params,
+                   tllm_to_hf_weight_map['transformer.vocab_embedding'], dtype)
     if hf_model.config.tie_word_embeddings:
         # lm_head.weight has the same weights as embedding
         if mapping.is_last_pp_rank():
@@ -1152,7 +1281,15 @@ def load_weights_from_hf_model(hf_model,
     if mapping.is_first_pp_rank():
         weights['transformer.vocab_embedding.weight'] = v
 
-    lm_head_weights = get_weight(model_params, 'lm_head', dtype)
+    # if not use_parallel_embedding:
+    #     weights['transformer.vocab_embedding.weight'] = embed_w
+    # else:
+    #     assert hf_model.config.vocab_size % tensor_parallel == 0
+    #     weights['transformer.vocab_embedding.weight'] = split_matrix_tp(
+    #         embed_w, tensor_parallel, rank
+
+    lm_head_weights = get_weight(model_params, tllm_to_hf_weight_map['lm_head'],
+                                 dtype)
 
     if mapping.is_last_pp_rank():
         if config.vocab_size % mapping.tp_size != 0:

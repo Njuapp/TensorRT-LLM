@@ -345,7 +345,7 @@ class Attention(Module):
             self.rotary_embedding_scale_type = RotaryScalingType.linear if rotary_embedding_scaling[
                 "type"] == "linear" else RotaryScalingType.dynamic
             self.rotary_embedding_scale = rotary_embedding_scaling["factor"]
-            assert self.rotary_embedding_scale > 1.0
+            assert self.rotary_embedding_scale >= 1.0
 
         self.rotary_embedding_dim = 0
         if self.position_embedding_type.is_rope():
@@ -578,6 +578,7 @@ class Attention(Module):
                     max_encoder_context_length,
                     host_encoder_input_lengths=q_lora_params.
                     host_encoder_input_lengths,
+                    partial_lora_mask=lora_layer_params.partial_lora_mask,
                 )
 
                 q_lora, k_lora, v_lora = self.qkv_lora(hidden_states,

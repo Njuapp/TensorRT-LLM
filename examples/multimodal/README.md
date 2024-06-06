@@ -9,6 +9,7 @@ We first describe how to run each model on a single GPU. We then provide general
 
 - [BLIP2-T5](#blip2-t5)
 - [BLIP2-OPT](#blip2-opt)
+- [InternLM-XComposer2](#internlm-xcomposer2)
 - [CogVLM](#cogvlm)
 - [Deplot](#deplot)
 - [Fuyu](#fuyu)
@@ -165,6 +166,50 @@ OPT pipeline needs few minor changes from T5 pipeline
 
     **NOTE:** INT8/INT4 option is not supported for BLIP2-T5, because quantization support has not been
           added for encoder-decoder models yet.
+
+## InternLM-XComposer2
+
+1. Convert Huggingface weights to TRT-LLM checkpoint format in `examples/llama/README.md`.
+
+2. Use `trtllm-build` command to build TRT-LLM engine for OPT.
+
+3. The full list of commands is as follows:
+
+    ```bash
+    export MODEL_NAME=internlm-xcomposer2-vl-7b
+    git lfs clone https://huggingface.co/internlm/${MODEL_NAME} tmp/hf_models/${MODEL_NAME}
+
+    python ../llama/convert_checkpoint.py \
+        --model_dir tmp/hf_models/${MODEL_NAME} \
+        --dtype float16 \
+        --output_dir tmp/trt_models/${MODEL_NAME}/fp16/1-gpu
+
+    trtllm-build \
+        --checkpoint_dir tmp/trt_models/${MODEL_NAME}/fp16/1-gpu \
+        --output_dir trt_engines/${MODEL_NAME}/fp16/1-gpu \
+        --gemm_plugin float16 \
+        --lora_plugin float16 \
+        --lora_dir . \
+        --max_lora_rank 256 \
+        --max_input_len 1536 \
+        --max_output_len 200 \
+        --max_num_tokens 24576 \
+        --max_batch_size 64 \
+        --max_multimodal_len 78400 # 78400 = 1225(visual token/img) * 64 (max_batch_size), as each image corresponds to 1225 visual tokens in the ViT here
+
+    python build_visual_engine.py \
+        --model_type ${MODEL_NAME} \
+        --model_path tmp/hf_models/${MODEL_NAME} \
+        --max_batch_size 48
+
+    python run.py \
+        --max_new_tokens 200 \
+        --hf_model_dir tmp/hf_models/${MODEL_NAME} \
+        --visual_engine_dir visual_engines/${MODEL_NAME} \
+        --llm_engine_dir trt_engines/${MODEL_NAME}/fp16/1-gpu \
+        --run_profiling \
+        --batch_size 48
+    ```
 
 ## CogVLM
 

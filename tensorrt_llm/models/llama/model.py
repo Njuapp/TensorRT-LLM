@@ -15,7 +15,7 @@
 from typing import Optional, Union
 
 from ..._utils import pad_vocab_size
-from ...functional import Tensor, non_gated_version, recv, send
+from ...functional import Tensor, non_gated_version, recv, send, unsqueeze
 from ...layers import (MOE, Attention, AttentionMaskType, ColumnLinear,
                        Embedding, GatedMLP, PositionEmbeddingType, RmsNorm)
 from ...lora_manager import LoraConfig, use_lora
@@ -173,6 +173,8 @@ class LLaMAModel(Module):
         init_all_reduce_helper()
 
         self.mapping = config.mapping
+        self.vocab_size = config.vocab_size
+        self.has_partial_lora_mask = config.has_partial_lora_mask
         if self.mapping.is_first_pp_rank():
             self.vocab_embedding = Embedding(config.vocab_size,
                                              config.hidden_size,
@@ -207,6 +209,10 @@ class LLaMAModel(Module):
             hidden_states = self.vocab_embedding(input_ids, *ptuning_args)
         else:
             hidden_states = recv(hidden_states, self.mapping.prev_pp_rank())
+
+        if lora_params is not None and self.has_partial_lora_mask:
+            partial_lora_mask = input_ids > (self.vocab_size - 1)
+            lora_params.partial_lora_mask = unsqueeze(partial_lora_mask, -1)
 
         hidden_states = self.layers.forward(
             hidden_states,

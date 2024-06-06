@@ -16,7 +16,7 @@ import tensorrt as trt
 from huggingface_hub import hf_hub_download
 from PIL import Image
 from torchvision import transforms
-from transformers import (AutoConfig, AutoProcessor, AutoTokenizer,
+from transformers import (AutoConfig, AutoModel, AutoProcessor, AutoTokenizer,
                           Blip2Processor, CLIPImageProcessor, NougatProcessor,
                           NougatTokenizerFast)
 
@@ -59,6 +59,12 @@ def parse_arguments():
     parser.add_argument('--top_p', type=float, default=0.0)
     parser.add_argument('--temperature', type=float, default=1.0)
     parser.add_argument('--repetition_penalty', type=float, default=1.0)
+    parser.add_argument(
+        '--lora_task_uids',
+        type=str,
+        default=None,
+        nargs="+",
+        help="The list of LoRA task uids; use -1 to disable the LoRA module")
     parser.add_argument('--run_profiling',
                         action='store_true',
                         help='Profile runtime over several iterations')
@@ -122,6 +128,8 @@ class MultimodalModelRunner:
 
         if self.model_type == 'video-neva':
             self.num_frames = config['builder_config'].get('num_frames', None)
+        if 'internlm' in self.model_type:
+            self.args.lora_task_uids = ['0'] * args.batch_size
 
         self.profiling_iterations = 20
 
@@ -180,7 +188,10 @@ class MultimodalModelRunner:
                 use_legacy=False)
         else:
             self.tokenizer = AutoTokenizer.from_pretrained(
-                self.args.hf_model_dir, use_fast=False, use_legacy=False)
+                self.args.hf_model_dir,
+                use_fast=False,
+                use_legacy=False,
+                trust_remote_code=True)
 
         self.tokenizer.padding_side = "right"
 
@@ -423,6 +434,7 @@ class MultimodalModelRunner:
                 temperature=self.args.temperature,
                 repetition_penalty=self.args.repetition_penalty,
                 num_beams=self.args.num_beams,
+                lora_uids=self.args.lora_task_uids,
                 output_sequence_lengths=False,
                 return_dict=False)
         else:
@@ -689,6 +701,10 @@ class MultimodalModelRunner:
                                             stream=True).raw).convert('RGB')
         elif "video-neva" in self.model_type:
             image = args.video_path
+        elif "internlm" in self.model_type:
+            img_url = "https://huggingface.co/internlm/internlm-xcomposer2-vl-7b/resolve/main/image1.webp"
+            image = Image.open(requests.get(img_url,
+                                            stream=True).raw).convert('RGB')
         else:
             img_url = 'https://storage.googleapis.com/sfr-vision-language-research/LAVIS/assets/merlion.png'
             image = Image.open(requests.get(img_url,
@@ -708,6 +724,25 @@ class MultimodalModelRunner:
 
             pre_prompt = input_text
             post_prompt = None
+        elif 'internlm' in self.model_type:
+            #Feed the raw image into vis_processor, to get processed image
+            model = AutoModel.from_pretrained(self.model_type,
+                                              trust_remote_code=True)
+            vis_processor = model.vis_processor
+            image = vis_processor(raw_image).unsqueeze(0).cuda()
+
+            if input_text is None:
+                input_text = "Please describe this image in detail."
+
+            pre_prompt = ''
+            meta_instruction = 'You are an AI assistant whose name is InternLM-XComposer (浦语·灵笔).\n'
+            '- InternLM-XComposer (浦语·灵笔) is a multi-modality conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.\n'
+            '- InternLM-XComposer (浦语·灵笔) can understand and communicate fluently in the language chosen by the user such as English and 中文.\n'
+            '- InternLM-XComposer (浦语·灵笔) is capable of comprehending and articulating responses effectively based on the provided image.',
+            pre_prompt += f"""[UNUSED_TOKEN_146]system\n{meta_instruction}[UNUSED_TOKEN_145]\n"""
+            pre_prompt += f"""[UNUSED_TOKEN_146]user\n"""
+
+            post_prompt = f"""{input_text}[UNUSED_TOKEN_145]\n[UNUSED_TOKEN_146]assistant\n"""
         elif 'nougat' in self.model_type:
             processor = NougatProcessor.from_pretrained(self.args.hf_model_dir)
             image = processor(raw_image, return_tensors="pt")['pixel_values']
