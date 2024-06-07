@@ -694,7 +694,7 @@ def load_weights_from_hf_model(hf_model,
     mha_mode = (config.num_key_value_heads == config.num_attention_heads)
     layers_range = config.mapping.pp_layers(config.num_hidden_layers)
 
-    if config.has_partial_lora_rank == True:
+    if config.has_partial_lora_mask == True:
         lora_weights = {}
         is_xcomposer = True
         tllm_to_hf_weight_map = {

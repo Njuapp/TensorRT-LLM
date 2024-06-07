@@ -16,7 +16,7 @@
 from typing import List
 
 from .._common import default_net
-from ..functional import Tensor, lora_plugin, where
+from ..functional import Tensor, lora_plugin, where, constant_to_tensor_
 from ..module import Module
 
 
@@ -83,14 +83,15 @@ class Lora(Module):
                 weight_index=lora_runtime_params.weight_index,
             )
             if lora_runtime_params.partial_lora_mask is not None:
+                zero_tensor = constant_to_tensor_(0.0, x.dtype)
                 if isinstance(result, List):
                     result = [
-                        where(lora_runtime_params.partial_lora_mask, r, 0.0)
+                        where(lora_runtime_params.partial_lora_mask, r, zero_tensor)
                         for r in result
                     ]
                 elif isinstance(result, Tensor):
                     result = where(lora_runtime_params.partial_lora_mask,
-                                   result, 0.0)
+                                   result, zero_tensor)
                 else:
                     assert False
         else:

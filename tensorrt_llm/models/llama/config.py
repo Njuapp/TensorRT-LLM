@@ -107,12 +107,12 @@ class LLaMAConfig(PretrainedConfig):
                     "architectures"]
                 hf_config.llm_cfg["dtype"] = hf_config.llm_cfg["torch_dtype"]
                 hf_config = PretrainedConfig.from_dict(hf_config.llm_cfg)
-            if hf_config.model_type == 'internlmxcomposer2':
-                # InternLM-XComposer2 has a mask for partial lora
-                # Therefore we need an additional flag for this mask
-                has_lora_mask = True
-            else:
-                has_lora_mask = False
+        if hf_config.model_type == 'internlmxcomposer2':
+            # InternLM-XComposer2 has a mask for partial lora
+            # Therefore we need an additional flag for this mask
+            has_lora_mask = True
+        else:
+            has_lora_mask = False
 
         num_key_value_heads = getattr(hf_config, "num_key_value_heads",
                                       hf_config.num_attention_heads)

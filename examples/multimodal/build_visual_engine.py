@@ -31,7 +31,7 @@ def parse_arguments():
                         choices=[
                             'opt-2.7b', 'opt-6.7b', 'flan-t5-xl', 'flan-t5-xxl',
                             'llava', 'vila', 'nougat', 'cogvlm', 'fuyu',
-                            'pix2struct', 'neva', 'kosmos-2', 'video-neva'
+                            'pix2struct', 'neva', 'kosmos-2', 'video-neva',
                             'internlm-xcomposer2-vl-7b'
                         ],
                         help="Model type")

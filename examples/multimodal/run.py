@@ -16,7 +16,7 @@ import tensorrt as trt
 from huggingface_hub import hf_hub_download
 from PIL import Image
 from torchvision import transforms
-from transformers import (AutoConfig, AutoModel, AutoProcessor, AutoTokenizer,
+from transformers import (AutoConfig, AutoProcessor, AutoTokenizer,
                           Blip2Processor, CLIPImageProcessor, NougatProcessor,
                           NougatTokenizerFast)
 
@@ -726,6 +726,7 @@ class MultimodalModelRunner:
             post_prompt = None
         elif 'internlm' in self.model_type:
             #Feed the raw image into vis_processor, to get processed image
+            from transformers import AutoModel
             model = AutoModel.from_pretrained(self.model_type,
                                               trust_remote_code=True)
             vis_processor = model.vis_processor
