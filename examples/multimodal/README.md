@@ -200,7 +200,7 @@ OPT pipeline needs few minor changes from T5 pipeline
     python build_visual_engine.py \
         --model_type ${MODEL_NAME} \
         --model_path tmp/hf_models/${MODEL_NAME} \
-        --max_batch_size 48
+        --max_batch_size 64
 
     python run.py \
         --max_new_tokens 200 \
@@ -208,7 +208,7 @@ OPT pipeline needs few minor changes from T5 pipeline
         --visual_engine_dir visual_engines/${MODEL_NAME} \
         --llm_engine_dir trt_engines/${MODEL_NAME}/fp16/1-gpu \
         --run_profiling \
-        --batch_size 48
+        --batch_size 64
     ```
 
 ## CogVLM
