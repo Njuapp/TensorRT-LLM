@@ -193,7 +193,6 @@ OPT pipeline needs few minor changes from T5 pipeline
         --max_lora_rank 256 \
         --max_input_len 1536 \
         --max_output_len 200 \
-        --max_num_tokens 24576 \
         --max_batch_size 64 \
         --max_multimodal_len 78400 # 78400 = 1225(visual token/img) * 64 (max_batch_size), as each image corresponds to 1225 visual tokens in the ViT here
 
@@ -208,7 +207,7 @@ OPT pipeline needs few minor changes from T5 pipeline
         --visual_engine_dir visual_engines/${MODEL_NAME} \
         --llm_engine_dir trt_engines/${MODEL_NAME}/fp16/1-gpu \
         --run_profiling \
-        --batch_size 64
+        --batch_size 4
     ```
 
 ## CogVLM
