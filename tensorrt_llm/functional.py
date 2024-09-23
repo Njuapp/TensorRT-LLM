@@ -4599,6 +4599,7 @@ def gpt_attention(
     cross_qkv_length: Optional[Tensor] = None,  # for cross attention
     encoder_input_lengths: Optional[Tensor] = None,  # for cross attention
     relative_attention_bias: Optional[Tensor] = None,  # for relative attention
+    logn_scaling: Optional[Tensor] = None,  # for logn scaling
     max_distance: int = 0,  # for relative attention
     host_context_lengths: Optional[Tensor] = None,  # for pad-free input mode
     qkv_bias: Optional[Tensor] = None,
@@ -4802,6 +4803,9 @@ def gpt_attention(
         encoder_input_lengths: Tensor
             The tensor that stores the length of each encoder input sequence. Its shape is [batch_size],
 
+        logn_scaling: Tensor = None
+            The logn scaling tensor [max_position_embedding_len], which is applied to q in order to help extrapolation
+
         relative_attention_bias: Tensor = None
             The relative attention bias [num_heads, max_seq_len, max_seq_len], or The relative attention embedding table for implicit mode, [num_heads, num_buckets].
 
@@ -4866,6 +4870,11 @@ def gpt_attention(
         is_unfuse_qkv_gemm = 1
     else:
         is_unfuse_qkv_gemm = 0
+    if logn_scaling is not None:
+        use_logn_scaling = 1
+    else:
+        use_logn_scaling = 0
+
     unfuse_qkv_gemm = trt.PluginField(
         "unfuse_qkv_gemm", np.array(np.int8(is_unfuse_qkv_gemm), dtype=np.int8),
         trt.PluginFieldType.INT8)
@@ -5032,6 +5041,9 @@ def gpt_attention(
     use_cache_pf = trt.PluginField("use_cache",
                                    np.array([use_cache], dtype=np.int32),
                                    trt.PluginFieldType.INT32)
+    use_logn_scaling = trt.PluginField(
+        "use_logn_scaling", np.array(np.int8(use_logn_scaling), dtype=np.int8),
+        trt.PluginFieldType.INT8)
 
     pfc = trt.PluginFieldCollection([
         layer_idx, nheads, vision_start, vision_length, num_kv_heads, head_size,
@@ -5049,7 +5061,7 @@ def gpt_attention(
         pos_shift_enabled, dense_context_fmha, use_paged_context_fmha_field,
         use_fp8_context_fmha_field, use_cache_pf, is_spec_decoding_enabled,
         spec_decoding_is_generation_length_variable,
-        spec_decoding_max_generation_length
+        spec_decoding_max_generation_length, use_logn_scaling
     ])
 
     attn_plug = attn_plg_creator.create_plugin("causal_attn", pfc)
@@ -5124,6 +5136,9 @@ def gpt_attention(
         ]
     if host_runtime_perf_knobs is not None:
         plug_inputs += [host_runtime_perf_knobs]
+
+    if logn_scaling is not None:
+        plug_inputs += [logn_scaling]
 
     for idx, i in enumerate(plug_inputs):
         assert i is not None, f"Found None input for {idx} th item in plugin inputs {plug_inputs}"

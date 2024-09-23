@@ -91,8 +91,9 @@ public:
         float rotary_embedding_base, tensorrt_llm::kernels::RotaryScalingType rotary_embedding_scale_type,
         float rotary_embedding_scale, float rotary_embedding_short_m_scale, float rotary_embedding_long_m_scale,
         int rotary_embedding_max_positions, int rotary_embedding_original_max_positions, int tp_size,
-        int tp_rank,          // for ALiBi
-        bool unfuse_qkv_gemm, // for AutoPP
+        int tp_rank,           // for ALiBi
+        bool unfuse_qkv_gemm,  // for AutoPP
+        bool use_logn_scaling, // for LognScaling
         tensorrt_llm::kernels::ContextFMHAType context_fmha_type, bool enable_xqa, int kv_cache_quant_mode,
         bool remove_input_padding, tensorrt_llm::kernels::AttentionMaskType mask_type,
         tensorrt_llm::kernels::BlockSparseParams block_sparse_params, bool paged_kv_cache, int tokens_per_block,
@@ -199,6 +200,7 @@ private:
         SPEC_DECODING_PACKED_MASK,
         SPEC_DECODING_POSITION_OFFSETS,
         HOST_RUNTIME_PERF_KNOBS,
+        LOGN_SCALING,
         ENUM_SIZE,
     };
 

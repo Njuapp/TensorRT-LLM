@@ -1470,6 +1470,8 @@ __global__ void __launch_bounds__(MAX_THEADS_PER_BLOCK, MIN_BLOCKS_PER_SM) maske
 
     // Do we have a relative attention bias?
     bool has_relative_attention_bias = params.relative_attention_bias != nullptr;
+    // Do we have a logn scale ptr?
+    bool has_logn_scaling = params.logn_scaling_ptr != nullptr;
     // IMPLICIT_REL_ATTN_BIAS:
     // Compute relative attention bias on the fly, with relative attention table [head_num/TP, num_buckets] passed in.
     // num_buckets passed as relative_attention_bias_stride, max_distance passed as params.max_distance
@@ -1848,6 +1850,12 @@ __global__ void __launch_bounds__(MAX_THEADS_PER_BLOCK, MIN_BLOCKS_PER_SM) maske
     constexpr unsigned K_VECS_PER_THREAD{Dh_MAX / K_ELTS_PER_CHUNK};
     static_assert(Dh_MAX == K_ELTS_PER_CHUNK * K_VECS_PER_THREAD);
 
+    float logn_scale = 1.f;
+    if (has_logn_scaling)
+    {
+        logn_scale = params.logn_scaling_ptr[tlength];
+    }
+
     // Load the Q values from shared memory. The values are reused during the loop on K.
     K_vec_accum q_vec[K_VECS_PER_THREAD];
 #pragma unroll
@@ -1855,6 +1863,22 @@ __global__ void __launch_bounds__(MAX_THEADS_PER_BLOCK, MIN_BLOCKS_PER_SM) maske
     {
         q_vec[ii] = vec_conversion<K_vec_accum, K_vec_k>(*reinterpret_cast<K_vec_k const*>(
             &q_smem[tensorrt_llm::common::flat_index2(ii, k_idx.y, K_ELTS_PER_CHUNK)]));
+        if (has_logn_scaling)
+        {
+#ifdef MMHA_USE_FP32_ACCUM_FOR_FMA
+            float* q_float_ptr = reinterpret_cast<float*>(q_vec);
+            for (unsigned jj = 0; jj < K_VEC_SIZE; jj++)
+            {
+                q_float_ptr[jj] *= logn_scale;
+            }
+#else
+            T* q_T_ptr = reinterpret_cast<T*>(q_vec);
+            for (unsigned jj = 0; jj < K_VEC_SIZE; jj++)
+            {
+                q_T_ptr[jj] = static_cast<T>(< static_cast<float>(q_T_ptr[jj]) * logn_scale);
+            }
+#endif
+        }
     }
 
     // The number of timesteps loaded per iteration, i.e., (THREADS_PER_BLOCK * THREADS_PER_BLOCK) / 256 <= 256

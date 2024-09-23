@@ -227,7 +227,7 @@ void DecoderXQAImplJIT::runImpl(XQAParams const& xqaParams, KVCacheBuffer const&
     void* xqa_q_input_ptr = ioScratch;
     QKVPreprocessingParams<T, KVCacheBuffer> preprocessingParms{static_cast<T*>(const_cast<void*>(xqaParams.qkv)),
         nullptr, static_cast<T*>(xqa_q_input_ptr), kv_cache_buffer, static_cast<T const*>(xqaParams.qkv_bias),
-        xqaParams.spec_decoding_generation_lengths, xqaParams.sequence_lengths,
+        xqaParams.logn_scaling_ptr, xqaParams.spec_decoding_generation_lengths, xqaParams.sequence_lengths,
         xqaParams.multi_query_tokens ? launchParams.cu_seq_lens : nullptr, launchParams.rotary_inv_freq_buf,
         (float2 const*) nullptr, xqaParams.kv_scale_orig_quant, xqaParams.spec_decoding_position_offsets,
         int(batch_beam_size), xqaParams.generation_input_length, xqaParams.timestep,

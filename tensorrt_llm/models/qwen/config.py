@@ -31,6 +31,7 @@ class QWenConfig(PretrainedConfig):
                  rotary_base: float = 10000.0,
                  rotary_scaling: Optional[dict] = None,
                  disable_weight_only_quant_plugin: bool = False,
+                 use_logn_attn: bool = False,
                  moe: Optional[Union[MoeConfig, dict]] = None,
                  **kwargs):
         self.mlp_bias = mlp_bias
@@ -38,6 +39,7 @@ class QWenConfig(PretrainedConfig):
         self.rotary_base = rotary_base
         self.rotary_scaling = rotary_scaling
         self.disable_weight_only_quant_plugin = disable_weight_only_quant_plugin
+        self.use_logn_attn = use_logn_attn
         if moe is None:
             # Legacy MOE config fields
             moe = MoeConfig(num_experts=kwargs.pop('moe_num_experts', 0),
@@ -61,6 +63,7 @@ class QWenConfig(PretrainedConfig):
         output['rotary_scaling'] = self.rotary_scaling
         output[
             'disable_weight_only_quant_plugin'] = self.disable_weight_only_quant_plugin
+        output['use_logn_attn'] = self.use_logn_attn
         output['moe'] = self.moe.to_dict()
         return output
 
@@ -94,6 +97,7 @@ class QWenConfig(PretrainedConfig):
             hidden_act = "swiglu"
         attn_bias = True  # All existing Qwen models have attn bias
         rotary_scaling = getattr(hf_config, "rope_scaling", None)
+        use_logn_attn = getattr(hf_config, "use_logn_attn", False)
         disable_weight_only_quant_plugin = kwargs.pop(
             'disable_weight_only_quant_plugin', False)
         if qwen_type == "qwen":
@@ -141,6 +145,7 @@ class QWenConfig(PretrainedConfig):
             rotary_base=rotary_base,
             rotary_scaling=rotary_scaling,
             disable_weight_only_quant_plugin=disable_weight_only_quant_plugin,
+            use_logn_attn=use_logn_attn,
             qwen_type=qwen_type,
             moe_intermediate_size=moe_intermediate_size,
             moe_shared_expert_intermediate_size=

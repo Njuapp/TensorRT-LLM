@@ -70,6 +70,7 @@ class QWenDecoderLayer(Module):
             tp_group=self.tp_group,
             tp_size=tp_size,
             quant_mode=config.quant_mode,
+            use_logn_scaling=config.use_logn_attn,
             dense_bias=False)
 
         ClsMLP = GatedMLP

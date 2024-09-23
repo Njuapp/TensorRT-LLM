@@ -486,6 +486,17 @@ __global__ void applyBiasRopeUpdateKVCache(QKVPreprocessingParams<T, KVCacheBuff
             }
             }
 
+            if (params.logn_scaling != nullptr)
+            {
+                auto const logn_scale = params.logn_scaling[token_idx_in_seq];
+                // q = mmha::scale(q, logn_scale);
+#pragma unroll
+                for (int elt_id = 0; elt_id < VEC_SIZE; elt_id++)
+                {
+                    T& q_ = reinterpret_cast<T*>(&q)[elt_id];
+                    q_ = static_cast<T>(static_cast<float>(q_) * logn_scale);
+                }
+            }
             auto const channelIdx{tidx};
             auto const tokenIdxLowerBound
                 = max(cache_seq_len - params.cyclic_kv_cache_len + params.sink_token_len, params.sink_token_len);
@@ -617,7 +628,7 @@ struct VecType<__nv_bfloat16>
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, typename TCache, int BLOCK_SIZE, int Dh, bool ADD_BIAS, bool STORE_QKV, bool FP8_OUTPUT,
-    typename KVCacheBuffer, RotaryPositionEmbeddingType ROTARY_TYPE>
+    typename KVCacheBuffer, RotaryPositionEmbeddingType ROTARY_TYPE, bool USE_LOGN_SCALING>
 __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBuffer> params)
 {
     // This kernel add bias to QKV, which has shape [batch_size, seq_len, 3, head_num, size_per_head]
@@ -786,6 +797,17 @@ __global__ void applyBiasRopeUpdateKVCacheV2(QKVPreprocessingParams<T, KVCacheBu
                 float2 rotary_coef_cache
                     = valid_rotary_dim_idx ? rotary_coef_cache_buffer[elt_id] : masked_rotary_cos_sin;
                 mmha::apply_rotary_embedding_gptj(q_, k_, rotary_coef_cache);
+            }
+        }
+
+        if constexpr (USE_LOGN_SCALING)
+        {
+            auto const logn_scale = params.logn_scaling[token_idx_in_kv_cache];
+#pragma unroll
+            for (int elt_id = 0; elt_id < ELTS_PER_VEC; elt_id++)
+            {
+                T& q_ = reinterpret_cast<T*>(&q)[elt_id];
+                q_ = static_cast<T>(static_cast<float>(q_) * logn_scale);
             }
         }
 
@@ -995,24 +1017,24 @@ void kernelV1Dispatch(QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStrea
     }
 }
 
-#define APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, STORE_QKV, FP8_OUTPUT)                                            \
+#define APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, STORE_QKV, FP8_OUTPUT, USE_LOGN_SCALING)                          \
     dim3 block(BLOCK_SIZE);                                                                                            \
     dim3 grid(int(divUp(params.max_input_seq_len, tokens_per_cuda_block)), params.batch_size, params.head_num);        \
     if (params.position_embedding_type == PositionEmbeddingType::kROPE_GPT_NEOX                                        \
         || params.position_embedding_type == PositionEmbeddingType::kLONG_ROPE)                                        \
     {                                                                                                                  \
         applyBiasRopeUpdateKVCacheV2<T, TCache, BLOCK_SIZE, Dh, ADD_BIAS, STORE_QKV, FP8_OUTPUT, KVCacheBuffer,        \
-            RotaryPositionEmbeddingType::GPT_NEOX><<<grid, block, 0, stream>>>(params);                                \
+            RotaryPositionEmbeddingType::GPT_NEOX, USE_LOGN_SCALING><<<grid, block, 0, stream>>>(params);              \
     }                                                                                                                  \
     else if (params.position_embedding_type == PositionEmbeddingType::kROPE_GPTJ)                                      \
     {                                                                                                                  \
         applyBiasRopeUpdateKVCacheV2<T, TCache, BLOCK_SIZE, Dh, ADD_BIAS, STORE_QKV, FP8_OUTPUT, KVCacheBuffer,        \
-            RotaryPositionEmbeddingType::GPTJ><<<grid, block, 0, stream>>>(params);                                    \
+            RotaryPositionEmbeddingType::GPTJ, USE_LOGN_SCALING><<<grid, block, 0, stream>>>(params);                  \
     }                                                                                                                  \
     else                                                                                                               \
     {                                                                                                                  \
         applyBiasRopeUpdateKVCacheV2<T, TCache, BLOCK_SIZE, Dh, ADD_BIAS, STORE_QKV, FP8_OUTPUT, KVCacheBuffer,        \
-            RotaryPositionEmbeddingType::NONE><<<grid, block, 0, stream>>>(params);                                    \
+            RotaryPositionEmbeddingType::NONE, USE_LOGN_SCALING><<<grid, block, 0, stream>>>(params);                  \
     }
 
 #define STORE_QKV_AND_FP8_OUTPUT_DISPATCH(ADD_BIAS)                                                                    \
@@ -1020,22 +1042,50 @@ void kernelV1Dispatch(QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStrea
     {                                                                                                                  \
         if (params.quantized_fp8_output)                                                                               \
         {                                                                                                              \
-            APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, true, true);                                                  \
+            if (use_logn_scaling)                                                                                      \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, true, true, true);                                        \
+            }                                                                                                          \
+            else                                                                                                       \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, true, true, false);                                       \
+            }                                                                                                          \
         }                                                                                                              \
         else                                                                                                           \
         {                                                                                                              \
-            APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, true, false);                                                 \
+            if (use_logn_scaling)                                                                                      \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, true, false, true);                                       \
+            }                                                                                                          \
+            else                                                                                                       \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, true, false, false);                                      \
+            }                                                                                                          \
         }                                                                                                              \
     }                                                                                                                  \
     else                                                                                                               \
     {                                                                                                                  \
         if (params.quantized_fp8_output)                                                                               \
         {                                                                                                              \
-            APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, false, true);                                                 \
+            if (use_logn_scaling)                                                                                      \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, false, true, true);                                       \
+            }                                                                                                          \
+            else                                                                                                       \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, false, true, false);                                      \
+            }                                                                                                          \
         }                                                                                                              \
         else                                                                                                           \
         {                                                                                                              \
-            APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, false, false);                                                \
+            if (use_logn_scaling)                                                                                      \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, false, false, true);                                      \
+            }                                                                                                          \
+            else                                                                                                       \
+            {                                                                                                          \
+                APPLY_BIAS_ROPE_UPDATE_KV_CACHE_V2(ADD_BIAS, false, false, false);                                     \
+            }                                                                                                          \
         }                                                                                                              \
     }
 
@@ -1043,6 +1093,7 @@ template <int BLOCK_SIZE, int Dh, typename T, typename TCache, typename KVCacheB
 void kernelV2DispatchHeadSize(QKVPreprocessingParams<T, KVCacheBuffer> params, cudaStream_t stream)
 {
     bool const add_bias = params.qkv_bias != nullptr;
+    bool const use_logn_scaling = params.logn_scaling != nullptr;
     bool const store_contiguous_qkv = !params.enable_paged_kv_fmha;
     int const vecs_per_head = (params.size_per_head * sizeof(T) / 16);
     TLLM_CHECK_WITH_INFO(BLOCK_SIZE % vecs_per_head == 0, "Kernel block should be able to handle entire heads.");

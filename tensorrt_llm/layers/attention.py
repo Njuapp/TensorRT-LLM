@@ -349,6 +349,7 @@ class Attention(Module):
                  max_attn_value=0.0,
                  block_sparse_params=None,
                  use_implicit_relative_attention=False,
+                 use_logn_scaling=False,
                  reorder=False):
         super().__init__()
 
@@ -402,6 +403,7 @@ class Attention(Module):
         self.long_mscale = 1.0
         self.rotary_embedding_percentage = rotary_embedding_percentage
         self.use_implicit_relative_attention = self.relative_attention and use_implicit_relative_attention
+        self.use_logn_scaling = use_logn_scaling
         if rotary_embedding_scaling is not None:
             rotary_scaling_type = rotary_embedding_scaling.get(
                 "type", rotary_embedding_scaling.get("rope_type"))
@@ -425,6 +427,13 @@ class Attention(Module):
             self.register_parameter(
                 'alibi_slopes',
                 Parameter(alibi_slopes, dtype='float32', is_buffer=True))
+
+        if self.use_logn_scaling:
+            self.register_parameter(
+                'logn_scaling',
+                Parameter(np.asarray([1.0] * self.max_position_embeddings),
+                          dtype='float32',
+                          is_buffer=True))
 
         self.quant_mode = quant_mode
         self.max_attn_value = max_attn_value
@@ -646,6 +655,10 @@ class Attention(Module):
 
         spec_decoding_params = SpecDecodingParams(
         ) if spec_decoding_params is None else spec_decoding_params
+
+        logn_scaling = None
+        if self.use_logn_scaling:
+            logn_scaling = self.logn_scaling.value
 
         alibi_slopes = None
         if self.position_embedding_type.is_alibi():
@@ -960,6 +973,7 @@ class Attention(Module):
                 cross_qkv=cross_qkv,
                 cross_qkv_length=attention_params.encoder_max_input_length,
                 encoder_input_lengths=attention_params.encoder_input_lengths,
+                logn_scaling=logn_scaling,
                 relative_attention_bias=self.rel_attn_table.value
                 if self.relative_attention else None,
                 max_distance=self.max_distance,
@@ -982,6 +996,8 @@ class Attention(Module):
         else:
             # plain TensorRT mode
             assert paged_kv_cache == False
+
+            assert logn_scaling is None, "plan TensorRT mode does not support logn scaling now"
 
             def transpose_for_scores(x,
                                      rotary: bool = False,

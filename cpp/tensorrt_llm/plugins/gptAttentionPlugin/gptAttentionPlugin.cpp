@@ -50,6 +50,7 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
     int rotary_embedding_max_positions, int rotary_embedding_original_max_positions, int tp_size,
     int tp_rank,                         // for ALiBi
     bool unfuse_qkv_gemm,                // for AutoPP
+    bool use_logn_scaling,               // for LognScaling
     tensorrt_llm::kernels::ContextFMHAType context_fmha_type, bool enable_xqa, int kv_cache_quant_mode,
     bool remove_input_padding, tensorrt_llm::kernels::AttentionMaskType mask_type,
     tensorrt_llm::kernels::BlockSparseParams block_sparse_params, bool paged_kv_cache, int tokens_per_block,
@@ -61,12 +62,20 @@ GPTAttentionPlugin::GPTAttentionPlugin(int layer_idx, int num_heads, int vision_
         unidirectional, q_scaling, qk_tanh_scale, position_embedding_type, rotary_embedding_dim, rotary_embedding_base,
         rotary_embedding_scale_type, rotary_embedding_scale, rotary_embedding_short_m_scale,
         rotary_embedding_long_m_scale, rotary_embedding_max_positions, rotary_embedding_original_max_positions, tp_size,
-        tp_rank, unfuse_qkv_gemm, context_fmha_type, enable_xqa, kv_cache_quant_mode, remove_input_padding, mask_type,
-        block_sparse_params, paged_kv_cache, tokens_per_block, type, max_context_length, qkv_bias_enabled,
-        cross_attention, max_distance, pos_shift_enabled, dense_context_fmha, use_paged_context_fmha,
-        use_fp8_context_fmha, use_cache, is_spec_decoding_enabled, spec_decoding_is_generation_length_variable,
-        spec_decoding_max_generation_length)
+        tp_rank, unfuse_qkv_gemm, use_logn_scaling, context_fmha_type, enable_xqa, kv_cache_quant_mode,
+        remove_input_padding, mask_type, block_sparse_params, paged_kv_cache, tokens_per_block, type,
+        max_context_length, qkv_bias_enabled, cross_attention, max_distance, pos_shift_enabled, dense_context_fmha,
+        use_paged_context_fmha, use_fp8_context_fmha, use_cache, is_spec_decoding_enabled,
+        spec_decoding_is_generation_length_variable, spec_decoding_max_generation_length)
 {
+    if (isLognScaling())
+    {
+        printf("isLognScaling=True\n");
+    }
+    else
+    {
+        printf("isLognScaling=False\n");
+    }
     initEntryIdx();
 }
 
@@ -102,6 +111,7 @@ bool GPTAttentionPlugin::isEntryUsed(IdxEntry const& entry) const
     case IdxEntry::ROTARY_COS_SIN: return isRoPE();
     case IdxEntry::ALIBI_SLOPES: return isALiBi();
     case IdxEntry::RELATIVE_ATTENTION_BIAS: return isRelativePosition();
+    case IdxEntry::LOGN_SCALING: return isLognScaling();
     case IdxEntry::CROSS_QKV: return isCrossAttention();
     case IdxEntry::CROSS_QKV_LENGTH: return isCrossAttention();
     case IdxEntry::ENCODER_INPUT_LENGTH: return isCrossAttention();
@@ -264,6 +274,10 @@ bool GPTAttentionPlugin::supportsFormatCombination(
         && (pos == getIdx(IdxEntry::CROSS_QKV_LENGTH) || pos == getIdx(IdxEntry::ENCODER_INPUT_LENGTH)))
     {
         return inOut[pos].type == nvinfer1::DataType::kINT32;
+    }
+    else if (isLognScaling() && pos == getIdx(IdxEntry::LOGN_SCALING))
+    {
+        return inOut[pos].type == nvinfer1::DataType::kFLOAT;
     }
     else if (pos == nbInputs && mFP8ContextFMHA)
     {
@@ -738,6 +752,10 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
             enqueue_params.relative_attention_bias_stride
                 = inputDesc[getIdx(IdxEntry::RELATIVE_ATTENTION_BIAS)].dims.d[1]; // max_seq_len or num_buckets
         }
+        if (isLognScaling())
+        {
+            enqueue_params.logn_scaling_ptr = static_cast<float const*>(inputs[getIdx(IdxEntry::LOGN_SCALING)]);
+        }
         if (isCrossAttention())
         {
             enqueue_params.cross_qkv = static_cast<T const*>(inputs[getIdx(IdxEntry::CROSS_QKV)]);
@@ -795,6 +813,10 @@ int GPTAttentionPlugin::enqueueSome(int32_t seqIdxBeg, int32_t localNbSeq, int32
                 = static_cast<T const*>(inputs[getIdx(IdxEntry::RELATIVE_ATTENTION_BIAS)]);
             enqueue_params.relative_attention_bias_stride
                 = inputDesc[getIdx(IdxEntry::RELATIVE_ATTENTION_BIAS)].dims.d[1]; // max_seq_len or num_buckets
+        }
+        if (isLognScaling())
+        {
+            enqueue_params.logn_scaling_ptr = static_cast<float const*>(inputs[getIdx(IdxEntry::LOGN_SCALING)]);
         }
         if (isCrossAttention())
         {
@@ -975,6 +997,7 @@ IPluginV2* GPTAttentionPluginCreator::createPlugin(char const* name, PluginField
             static_cast<int32_t>(p.getScalar<int32_t>("tp_size").value()),
             static_cast<int32_t>(p.getScalar<int32_t>("tp_rank").value()),
             static_cast<bool>(p.getScalar<int8_t>("unfuse_qkv_gemm").value()),
+            static_cast<bool>(p.getScalar<int8_t>("use_logn_scaling").value()),
             static_cast<ContextFMHAType>(p.getScalar<int8_t>("context_fmha_type").value()),
             static_cast<bool>(p.getScalar<int8_t>("enable_xqa").value()),
             p.getScalar<int32_t>("kv_cache_quant_mode").value(),

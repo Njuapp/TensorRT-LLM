@@ -16,6 +16,7 @@
 import copy
 import functools
 import json
+import math
 import os
 import time
 from collections import defaultdict
@@ -455,6 +456,7 @@ def convert_hf_qwen(hf_model,
                     act_range=[],
                     qkv_para=[],
                     smoother=[],
+                    use_logn_attn=False,
                     moe_config=None):
     weights = {}
     tik = time.time()
@@ -573,6 +575,17 @@ def convert_hf_qwen(hf_model,
                                        qkv_b, use_weight_only,
                                        plugin_weight_only_quant_type, dtype,
                                        use_gemm_woq_plugin))
+
+        if use_logn_attn:
+            logn_list = [
+                1 + 0.1 * math.log(i, hf_model.config.max_position_embeddings)
+                for i in range(1, hf_model.config.max_position_embeddings + 1)
+            ]
+            logn_tensor = {}
+            logn_tensor[tllm_prex +
+                        'attention.logn_scaling'] = torch.tensor(logn_list).to(
+                            torch.float32).cuda()
+            weights.update(logn_tensor)
 
         if int8_kv_cache:
             if qwen_type == 'qwen':
@@ -967,6 +980,7 @@ def load_weights_from_hf_model(hf_model,
     per_token = use_smooth_quant and 'PER_TOKEN' in quant_algo
     int8_kv_cache = config.quantization.kv_cache_quant_algo == QuantAlgo.INT8
     qwen_type = config.qwen_type
+    use_logn_attn = config.use_logn_attn
     weights = convert_hf_qwen(
         hf_model,
         qwen_type,
@@ -986,6 +1000,7 @@ def load_weights_from_hf_model(hf_model,
         act_range=act_range,
         qkv_para=qkv_para,
         smoother=smoother,
+        use_logn_attn=use_logn_attn,
         moe_config=moe_config)
     return weights
 
