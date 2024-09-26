@@ -34,6 +34,8 @@
 #include "cutlass_extensions/epilogue_helpers.h"
 #include "cutlass_extensions/gemm_configs.h"
 
+#include "cutlass_extensions/gemm/collective/collective_builder_interleaved.hpp"
+
 #ifndef _WIN32
 #pragma GCC diagnostic pop
 #endif // #ifndef _WIN32
@@ -154,16 +156,19 @@ void sm90_generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType 
         using ElementBCollectiveInfo = std::conditional_t<cutlass::hasZero(QuantOp), PackedScaleZero, PackedScale>;
 
         // We swap A and B operands to the builder here
-        using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<ArchTag, OperatorClass,
+        using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilderInterleaved<ArchTag, OperatorClass,
             ElementBCollectiveInfo, LayoutB_Transpose, AlignmentB, CutlassActivationType, LayoutA_Transpose, AlignmentA,
             ElementAccumulator, TileShape, ClusterShape,
             cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
                 sizeof(typename CollectiveEpilogue::SharedStorage))>,
             KernelSchedule>::CollectiveOp;
 
-        using GemmKernel = cutlass::gemm::kernel::GemmUniversal<Shape<int, int, int, int>, // Indicates ProblemShape
-            CollectiveMainloop, CollectiveEpilogue>;
+        using TileScheduler = cute::conditional_t<size<0>(CTAShape{}) == Int<64>{},
+            cutlass::gemm::PersistentScheduler, cutlass::gemm::StreamKScheduler>;
 
+        using GemmKernel = cutlass::gemm::kernel::GemmUniversal<Shape<int, int, int, int>, // Indicates ProblemShape
+            CollectiveMainloop, CollectiveEpilogue, TileScheduler>;
+        
         if (occupancy != nullptr)
         {
             *occupancy = tensorrt_llm::cutlass_extensions::compute_occupancy_for_kernel<GemmKernel, true>();

@@ -598,7 +598,7 @@ void preprocess_weights_for_mixed_gemm(int8_t* preprocessed_quantized_weight, in
         src_buf.swap(dst_buf);
     }
 
-    if (details.columns_interleaved > 1)
+    if (details.columns_interleaved > 1 && arch < 90)
     {
         interleave_column_major_tensor(dst_buf.data(), src_buf.data(), shape, quant_type, details);
         src_buf.swap(dst_buf);

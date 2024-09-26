@@ -567,6 +567,10 @@ CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType, Bia
     int const m, int const n, int const k)
 {
     TLLM_LOG_DEBUG(__PRETTY_FUNCTION__);
+    //For Hopper, we have to allocate large memory size in case for stream-K
+    if(sm_ == 90){
+        return 5 * multi_processor_count_ * MAX_M_TILE_SM90 * MAX_N_TILE_SM90 * sizeof(float);
+    }
     // These are the min tile sizes for each config, which would launch the maximum number of blocks
     int const max_grid_m = cutlass::ceil_div(m, MIN_M_TILE);
     int const max_grid_n = cutlass::ceil_div(n, MIN_N_TILE);

@@ -24,6 +24,8 @@ namespace weight_only
 {
 INSTANTIATE_WEIGHT_ONLY_CUDA_DISPATCHERS(
     KernelType::BF16Int8PerChannel, BF16DetailsA, Int8DetailsW, ColumnMajor, false, 64);
+INSTANTIATE_WEIGHT_ONLY_CUDA_DISPATCHERS(
+    KernelType::BF16Int8PerChannel, BF16DetailsA, Int8DetailsW, ColumnMajorInterleavedForHopper, false, 64);
 } // namespace weight_only
 } // namespace kernels
 } // namespace tensorrt_llm
