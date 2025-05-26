@@ -127,40 +127,39 @@ __device__ __forceinline__ void dequantize(void* w, void* quantized_w, void* sca
     using Type2 = typename MathWrapper<typename Details::TypeDetailsA>::Type2;
     using Converter = typename ConverterWrapper<Details>::Converter;
     static_assert(K % 2 == 0);
-    static constexpr int VecK = K / 2;
+    // static constexpr int VecK = K / 2;
 #pragma unroll
     for (int n = 0; n < N; ++n)
     {
         Converter::convert<K>(reinterpret_cast<uint8_t*>(quantized_w) + n * K / Details::kElemsPerByteW,
             reinterpret_cast<Type*>(w) + n * K);
-        Type2 vec_scale, vec_zero;
-        if constexpr (ApplyAlphaInAdvance)
-        {
-            // For W4A8, we assume scales/zero is always half data type, no matter activation dtype is bf16 or fp16
-            Type scales_ = static_cast<float>(reinterpret_cast<half*>(scales)[n]) * alpha;
-            vec_scale = MathWrapper<typename Details::TypeDetailsA>::to_vec2(scales_);
-            vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(static_cast<Type>(0.f));
-            if constexpr (EnableZero)
-            {
-                vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(
-                    static_cast<float>(reinterpret_cast<half*>(zeros)[n]) * alpha);
-            }
-        }
-        else
-        {
-            vec_scale = MathWrapper<typename Details::TypeDetailsA>::to_vec2(reinterpret_cast<Type*>(scales)[n]);
-            vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(static_cast<Type>(0.f));
-            if constexpr (EnableZero)
-            {
-                vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(reinterpret_cast<Type*>(zeros)[n]);
-            }
-        }
-#pragma unroll
-        for (int k = 0; k < VecK; ++k)
-        {
-            reinterpret_cast<Type2*>(w)[n * VecK + k] = MathWrapper<typename Details::TypeDetailsA>::fma2(
-                reinterpret_cast<Type2*>(w)[n * VecK + k], vec_scale, vec_zero);
-        }
+//         Type2 vec_scale, vec_zero;
+//         if constexpr (ApplyAlphaInAdvance)
+//         {
+//             Type scales_ = static_cast<float>(reinterpret_cast<half*>(scales)[n]) * alpha;
+//             vec_scale = MathWrapper<typename Details::TypeDetailsA>::to_vec2(scales_);
+//             vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(static_cast<Type>(0.f));
+//             if constexpr (EnableZero)
+//             {
+//                 vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(
+//                     static_cast<float>(reinterpret_cast<half*>(zeros)[n]) * alpha);
+//             }
+//         }
+//         else
+//         {
+//             vec_scale = MathWrapper<typename Details::TypeDetailsA>::to_vec2(reinterpret_cast<Type*>(scales)[n]);
+//             vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(static_cast<Type>(0.f));
+//             if constexpr (EnableZero)
+//             {
+//                 vec_zero = MathWrapper<typename Details::TypeDetailsA>::to_vec2(reinterpret_cast<Type*>(zeros)[n]);
+//             }
+//         }
+// #pragma unroll
+//         for (int k = 0; k < VecK; ++k)
+//         {
+//             reinterpret_cast<Type2*>(w)[n * VecK + k] = MathWrapper<typename Details::TypeDetailsA>::fma2(
+//                 reinterpret_cast<Type2*>(w)[n * VecK + k], vec_scale, vec_zero);
+//         }
     }
 }
 
@@ -178,7 +177,7 @@ __device__ __forceinline__ void pack_to_vec2(void* dst, void* src, int n)
 }
 
 template <typename Details, int M, int N, int K>
-__device__ __forceinline__ void mma(void* acc, void* w_pack2, void* act)
+__device__ __forceinline__ void mma(void* acc, void* w_pack2, void* act, void* scale)
 {
     using Type = typename MathWrapper<typename Details::TypeDetailsA>::Type;
     using Type2 = typename MathWrapper<typename Details::TypeDetailsA>::Type2;
@@ -190,14 +189,19 @@ __device__ __forceinline__ void mma(void* acc, void* w_pack2, void* act)
 #pragma unroll
         for (int n = 0; n < VecN; ++n)
         {
+            Type2 local_acc{};
 #pragma unroll
             for (int k = 0; k < K; ++k)
             {
-                reinterpret_cast<Type2*>(acc)[m * VecN + n]
+                local_acc
                     = MathWrapper<typename Details::TypeDetailsA>::fma2(reinterpret_cast<Type2*>(w_pack2)[n * K + k],
                         MathWrapper<typename Details::TypeDetailsA>::to_vec2(reinterpret_cast<Type*>(act)[m * K + k]),
-                        reinterpret_cast<Type2*>(acc)[m * VecN + n]);
+                        local_acc);
             }
+            reinterpret_cast<Type2*>(acc)[m * VecN + n] 
+                    = MathWrapper<typename Details::TypeDetailsA>::fma2(local_acc, 
+                        reinterpret_cast<Type2*>(scale)[n], 
+                        reinterpret_cast<Type2*>(acc)[m * VecN + n]);
         }
     }
 }
