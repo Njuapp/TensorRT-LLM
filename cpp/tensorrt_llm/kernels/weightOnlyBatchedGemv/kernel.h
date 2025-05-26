@@ -112,7 +112,8 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
         {
             act_iterator.load(tile_a, iter, i);
             apply_scale<Details, 1, StepK, EnableActScale>(tile_a, vec_act_scale);
-            mma<Details, 1, CtaN, StepK>(tile_acc + i * CtaN, tile_w_pack2, tile_a);
+            mma<Details, 1, CtaN, StepK, EnableZero, ApplyAlphaInAdvance>(
+                tile_acc + i * CtaN, tile_w_pack2, tile_a, vec_scale);
         }
     }
     epilogue<Details, CtaM, CtaN, Threads, EnableBias, ApplyAlphaInAdvance>(out, n, tile_acc, bias, alpha);
