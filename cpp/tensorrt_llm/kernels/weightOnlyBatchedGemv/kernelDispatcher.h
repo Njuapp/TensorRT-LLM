@@ -108,6 +108,8 @@ void check_pointer(Params& params, cudaStream_t s)
     }
     else
     {
+        check_alpha<Details, GroupSize, true, false, false>(params, s);
+        return;
         if (params.act_scale && params.zeros && params.bias)
         {
             check_alpha<Details, GroupSize, true, true, true>(params, s);

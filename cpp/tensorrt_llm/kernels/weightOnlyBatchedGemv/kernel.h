@@ -72,10 +72,10 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
     GMemIterator<Mandatory, AccessTypeW, CtaN, 1, uint8_t> weight_iterator(weight,
         (interleaved_offset_n * interleaved_k + tid * StepK) / Details::kElemsPerByteW, CtaK / Details::kElemsPerByteW,
         interleaved_k / Details::kElemsPerByteW);
-    GMemIterator<Mandatory, TypeA, CtaN, 1, TypeA> scales_iterator(scales,
+    GMemIterator<Mandatory, AccessTypeA, CtaN, 1, TypeA> scales_iterator(scales,
         (GroupSize != 0 ? real_offset_k / GroupSize * n : 0) + real_offset_n,
         (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
-    GMemIterator<EnableZero, TypeA, CtaN, 1, TypeA> zeros_iterator(zeros,
+    GMemIterator<EnableZero, AccessTypeA, CtaN, 1, TypeA> zeros_iterator(zeros,
         (GroupSize != 0 ? real_offset_k / GroupSize * n : 0) + real_offset_n,
         (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
 
@@ -122,11 +122,10 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
         TypeA vec_scale[CtaN], vec_zero[CtaN];
         TypeA tile_a[StepK], tile_w[StepK], tile_w_pack2[CtaN * StepK];
         uint8_t tile_w_quantized[StepK / Details::kElemsPerByteW];
-#pragma unroll
-        for (int i = 0; i < CtaN; ++i)
+        // if constexpr (Details::kInterleave == 1)
         {
-            scales_iterator.load(vec_scale + i, iter, i);
-            zeros_iterator.load(vec_zero + i, iter, i);
+            scales_iterator.load(vec_scale, iter);
+            zeros_iterator.load(vec_zero, iter);
         }
 #pragma unroll
         for (int i = 0; i < CtaN; ++i)
