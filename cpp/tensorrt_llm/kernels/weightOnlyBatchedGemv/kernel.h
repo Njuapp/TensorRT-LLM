@@ -136,7 +136,7 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
                 tile_w, tile_w_quantized, vec_scale + i, vec_zero + i, alpha);
             pack_to_vec2<Details, StepK>(tile_w_pack2, tile_w, i);
         }
-        //TODO: do some synchronization here for LDG + STS.128b, not LDGSTS.128b
+        asm volatile ("cp.async.wait_group 0;\n" ::);
         __syncthreads();
         act_scale_iterator.load(vec_act_scale, iter);
 #pragma unroll
