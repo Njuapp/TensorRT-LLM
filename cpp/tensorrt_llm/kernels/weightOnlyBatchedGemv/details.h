@@ -69,6 +69,27 @@ struct ColumnMajor
 };
 
 template <typename TypeDetailsA, typename TypeDetailsW, int TileSizeK>
+struct ColumnMajorW8A16
+{
+    using DetailsA = TypeDetailsA;
+    using DetailsW = TypeDetailsW;
+    using AccessTypeA = float4;
+    using AccessTypeW = int2;
+    static constexpr int kAccessSize = 128;
+    static constexpr int kStepK = kAccessSize / TypeDetailsA::kElemBits;
+    static constexpr int kTileSize = TileSizeK;
+    static constexpr int kInterleave = 1;
+
+    struct Mapper
+    {
+        __device__ __forceinline__ int operator()(int i)
+        {
+            return i;
+        }
+    };
+};
+
+template <typename TypeDetailsA, typename TypeDetailsW, int TileSizeK>
 struct ColumnMajorInterleavedForHopper
 {
     using DetailsA = TypeDetailsA;
