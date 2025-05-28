@@ -27,7 +27,7 @@ namespace weight_only
 {
 template <typename Details, int CtaM, int CtaN, int Threads, int GroupSize, bool EnableActScale, bool EnableZero,
     bool EnableBias, bool ApplyAlphaInAdvance, typename TypeA = typename Details::TypeDetailsA::Type>
-__global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scales, TypeA* zeros, TypeA* bias,
+__global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scales, TypeA* zeros, TypeA* bias,
     TypeA* out, float alpha, int m, int n, int k)
 {
     // clang-format off
@@ -48,6 +48,8 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
     static constexpr int StepK = Details::kStepK;
     static constexpr int CtaK = StepK * Threads;
     static_assert(CtaN % 2 == 0);
+    static_assert(Details::kAccessNumW == 1);
+    // static_assert(Details::kAccessNumA == 1 || Details::kAccessNumA == 2 || Details::kAccessNumA == 4);
     if constexpr (GroupSize != 0)
     {
         static_assert((CtaK / Details::kInterleave) % GroupSize == 0);
@@ -63,11 +65,11 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
         = (tid * StepK / (Details::kInterleave * Details::LayoutDetails::kTileSize)) * Details::LayoutDetails::kTileSize
         + ((tid * StepK) % Details::LayoutDetails::kTileSize);
 
-    GMemIterator<Mandatory, AccessTypeA, CtaM, Details::kAccessNumA, TypeA> act_iterator(
-        act, offset_m * origin_k + real_offset_k, CtaK / Details::kInterleave, origin_k);
-    GMemIterator<EnableActScale, AccessTypeA, 1, Details::kAccessNumA, TypeA> act_scale_iterator(
-        act_scale, real_offset_k, CtaK / Details::kInterleave, 0);
-    GMemIterator<Mandatory, AccessTypeW, CtaN, Details::kAccessNumW, uint8_t> weight_iterator(weight,
+    // GMemIterator<Mandatory, AccessTypeA, CtaM, Details::kAccessNumA, TypeA> act_iterator(
+    //     act, offset_m * origin_k + real_offset_k, CtaK / Details::kInterleave, origin_k);
+    // GMemIterator<EnableActScale, AccessTypeA, 1, Details::kAccessNumA, TypeA> act_scale_iterator(
+    //     act_scale, real_offset_k, CtaK / Details::kInterleave, 0);    
+    GMemIterator<Mandatory, AccessTypeW, CtaN, 1, uint8_t> weight_iterator(weight,
         (interleaved_offset_n * interleaved_k + tid * StepK) / Details::kElemsPerByteW, CtaK / Details::kElemsPerByteW,
         interleaved_k / Details::kElemsPerByteW);
     GMemIterator<Mandatory, TypeA, CtaN, 1, TypeA> scales_iterator(scales,
@@ -76,6 +78,28 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
     GMemIterator<EnableZero, TypeA, CtaN, 1, TypeA> zeros_iterator(zeros,
         (GroupSize != 0 ? real_offset_k / GroupSize * n : 0) + real_offset_n,
         (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
+
+    constexpr int NumStages = 1;
+    __shared__ TypeA smem_act[NumStages * CtaM * CtaK];
+    __shared__ TypeA smem_act_scale[NumStages * CtaK];
+    GmemToSmemIterator<Mandatory, AccessTypeA, Threads, Details::kAccessNumA, TypeA> gmem_act_iterator(
+        act, offset_m * origin_k, CtaK / Details::kInterleave, origin_k);
+    GmemToSmemIterator<EnableActScale, AccessTypeA, Threads, Details::kAccessNumA, TypeA> gmem_act_scale_iterator(
+        act_scale, 0, CtaK / Details::kInterleave, 0);
+    GMemIterator<Mandatory, AccessTypeA, CtaM, Details::kAccessNumA, TypeA> act_iterator(
+        smem_act, offset_m * origin_k + real_offset_k, 0, CtaK);
+    GMemIterator<EnableActScale, AccessTypeA, 1, Details::kAccessNumA, TypeA> act_scale_iterator(
+        smem_act_scale, real_offset_k, 0, 0);    
+    
+    // SMemIterator<Mandatory, AccessTypeW, CtaN, uint8_t> weight_iterator(weight,
+    //     (interleaved_offset_n * interleaved_k + tid * StepK) / Details::kElemsPerByteW, CtaK / Details::kElemsPerByteW,
+    //     interleaved_k / Details::kElemsPerByteW);
+    // SMemIterator<Mandatory, AccessTypeA, CtaN, TypeA> scales_iterator(scales,
+    //     (GroupSize != 0 ? real_offset_k / GroupSize * n : 0) + real_offset_n,
+    //     (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
+    // SMemIterator<EnableZero, AccessTypeA, CtaN, TypeA> zeros_iterator(zeros,
+    //     (GroupSize != 0 ? real_offset_k / GroupSize * n : 0) + real_offset_n,
+    //     (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
 
     out += offset_m * n + tile_id_n * CtaN * Details::kInterleave;
     if constexpr (EnableBias)
@@ -88,6 +112,12 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
 
     for (int idx_k = tid * StepK, iter = 0; idx_k < interleaved_k; idx_k += CtaK, ++iter)
     {
+#pragma unroll
+        for (int i = 0; i < CtaM; ++i)
+        {
+            gmem_act_iterator.load(smem_act + i * CtaK, iter, i);
+        }
+        gmem_act_scale_iterator.load(smem_act_scale, iter);
         TypeA vec_act_scale[StepK];
         TypeA vec_scale[CtaN], vec_zero[CtaN];
         TypeA tile_a[StepK], tile_w[StepK], tile_w_pack2[CtaN * StepK];
@@ -98,7 +128,6 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
             scales_iterator.load(vec_scale + i, iter, i);
             zeros_iterator.load(vec_zero + i, iter, i);
         }
-        act_scale_iterator.load(vec_act_scale, iter);
 #pragma unroll
         for (int i = 0; i < CtaN; ++i)
         {
@@ -107,6 +136,9 @@ __global__ void kernel(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* sca
                 tile_w, tile_w_quantized, vec_scale + i, vec_zero + i, alpha);
             pack_to_vec2<Details, StepK>(tile_w_pack2, tile_w, i);
         }
+        //TODO: do some synchronization here for LDG + STS.128b, not LDGSTS.128b
+        __syncthreads();
+        act_scale_iterator.load(vec_act_scale, iter);
 #pragma unroll
         for (int i = 0; i < CtaM; ++i)
         {
@@ -130,7 +162,7 @@ void exec_kernel(Params& params, cudaStream_t s)
     dim3 grid(params.m / CtaM, params.n / (CtaN * Details::kInterleave));
     dim3 block(Threads);
     // clang-format off
-    kernel<Details, CtaM, CtaN, Threads, GroupSize, EnableActScale, EnableZero, EnableBias, ApplyAlphaInAdvance><<<grid, block, 0, s>>>(
+    gemv<Details, CtaM, CtaN, Threads, GroupSize, EnableActScale, EnableZero, EnableBias, ApplyAlphaInAdvance><<<grid, block, 0, s>>>(
         reinterpret_cast<T*>(params.act),
         reinterpret_cast<T*>(params.act_scale),
         reinterpret_cast<uint8_t*>(params.weight),

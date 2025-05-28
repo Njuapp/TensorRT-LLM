@@ -311,6 +311,37 @@ private:
     int step_;
     int stride_;
 };
+
+template <bool Enable, typename TVec, int Threads, int Continuous, typename T>
+class GmemToSmemIterator
+{
+public:
+    __device__ __forceinline__ GmemToSmemIterator(T* addr, int offset, int step, int stride)
+        : addr_(Enable ? (addr + offset) : nullptr)
+        , step_(step)
+        , stride_(stride)
+    {
+    }
+
+    __device__ __forceinline__ void load(void* dst, int iter, int ii = 0)
+    {
+        if constexpr (Enable)
+        {
+#pragma unroll
+            for (int jj = 0; jj < Continuous; ++jj)
+            {
+                reinterpret_cast<TVec*>(dst)[jj * Threads + threadIdx.x] = 
+                    reinterpret_cast<TVec*>(addr_ + iter * step_ + ii * stride_)[jj * Threads + threadIdx.x];
+            }
+        }
+    }
+
+private:
+    T* addr_;
+    int step_;
+    int stride_;
+};
+
 } // namespace weight_only
 } // namespace kernels
 } // namespace tensorrt_llm
