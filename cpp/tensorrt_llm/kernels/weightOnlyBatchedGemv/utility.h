@@ -25,6 +25,20 @@ namespace kernels
 {
 namespace weight_only
 {
+template<typename T>
+__forceinline__ __device__ void ldgsts(T      & smem_dst,
+                                       T const* gmem_src,
+                                       bool     pred=true)
+{
+    int addr_smem_ = __cvta_generic_to_shared(&smem_dst);
+    int src_size = pred ? sizeof(T) : 0;
+    asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], %2, %3;\n"
+        :: "r"(addr_smem_),
+           "l"(gmem_src),
+           "n"(sizeof(T)),
+           "r"(src_size));
+}
+
 template <typename Details>
 struct ConverterWrapper
 {
@@ -350,10 +364,13 @@ public:
 #pragma unroll
             for (int jj = 0; jj < Continuous; ++jj)
             {
-                reinterpret_cast<TVec*>(dst)[jj * Threads + threadIdx.x] = 
-                    reinterpret_cast<TVec*>(addr_ + iter * step_ + ii * stride_)[jj * Threads + threadIdx.x];
+                ldgsts<TVec>(
+                    reinterpret_cast<TVec*>(dst)[jj * Threads + threadIdx.x],
+                    reinterpret_cast<TVec*>(addr_ + iter * step_ + ii * stride_) + jj * Threads + threadIdx.x
+                );
             }
         }
+        asm volatile ("cp.async.commit_group;\n" ::);
     }
 
 private:

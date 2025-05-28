@@ -122,8 +122,6 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
             gmem_act_iterator.load(smem_act + i * CtaK, iter, i);
         }
         gmem_act_scale_iterator.load(smem_act_scale, iter);
-        //Do some synchronization here for LDG + STS.128b, not LDGSTS.128b
-        __syncthreads();
         TypeA vec_act_scale[StepK];
         TypeA vec_scale[CtaN], vec_zero[CtaN];
         TypeA tile_a[StepK], tile_w[StepK], tile_w_pack2[CtaN * StepK];
@@ -150,6 +148,8 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
                 tile_w, tile_w_quantized, vec_scale + i, vec_zero + i, alpha);
             pack_to_vec2<Details, StepK>(tile_w_pack2, tile_w, i);
         }
+        asm volatile ("cp.async.wait_group 0;\n" ::);
+        __syncthreads();
         act_scale_iterator.load(vec_act_scale, iter);
 #pragma unroll
         for (int i = 0; i < CtaM; ++i)
