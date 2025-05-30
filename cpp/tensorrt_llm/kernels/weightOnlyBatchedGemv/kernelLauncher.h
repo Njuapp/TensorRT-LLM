@@ -51,9 +51,9 @@ inline void kernel_launcher(int arch, Params& params, cudaStream_t s)
         EXEC(KernelType::FP16Int8PerChannel, FP16DetailsA, Int8DetailsW, ColumnMajorInterleaved, true);
         EXEC(KernelType::FP16Int4PerChannel, FP16DetailsA, Int4DetailsW, ColumnMajorInterleaved, true);
     }
-    else if ((arch >= 80 && arch < 90) || arch >= 100)
+    else if ((arch >= 80 && arch < 90))
     {
-        if (arch == 89 || arch >= 120)
+        if (arch == 89)
         {
             EXEC_W4A8(KernelType::FP16Int4Groupwise, FP16DetailsA, Int4DetailsW, ColumnMajorInterleaved, true);
             EXEC_W4A8(KernelType::BF16Int4Groupwise, BF16DetailsA, Int4DetailsW, ColumnMajorInterleaved, true);
