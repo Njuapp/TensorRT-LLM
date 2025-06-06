@@ -116,6 +116,7 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
 
     for (int idx_k = tid * StepK, iter = 0; idx_k < interleaved_k; idx_k += CtaK, ++iter)
     {
+        __syncthreads();
 #pragma unroll
         for (int i = 0; i < CtaM; ++i)
         {
