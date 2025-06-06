@@ -84,14 +84,14 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
         (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
 
     constexpr int NumStages = 1;
-    __shared__ TypeA smem_act[NumStages * CtaM * CtaK];
-    __shared__ TypeA smem_act_scale[NumStages * CtaK];
-    GmemToSmemIterator<Mandatory, AccessTypeA, Threads, Details::kAccessNumA, TypeA> gmem_act_iterator(
-        act, offset_m * origin_k, CtaK / Details::kInterleave, origin_k);
-    GmemToSmemIterator<EnableActScale, AccessTypeA, Threads, Details::kAccessNumA, TypeA> gmem_act_scale_iterator(
+    __shared__ TypeA smem_act[NumStages * CtaM * CtaK / Details::kInterleave];
+    __shared__ TypeA smem_act_scale[NumStages * CtaK / Details::kInterleave];
+    GmemToSmemIterator<Mandatory, AccessTypeA, Threads, Details::kAccessNumA / Details::kInterleave, TypeA> gmem_act_iterator(
+        act, 0, CtaK / Details::kInterleave, origin_k);
+    GmemToSmemIterator<EnableActScale, AccessTypeA, Threads, Details::kAccessNumA / Details::kInterleave, TypeA> gmem_act_scale_iterator(
         act_scale, 0, CtaK / Details::kInterleave, 0);
     GMemIterator<Mandatory, AccessTypeA, CtaM, Details::kAccessNumA, TypeA> act_iterator(
-        smem_act, offset_m * origin_k + real_offset_k, 0, CtaK);
+        smem_act, offset_m * origin_k + real_offset_k, 0, CtaK / Details::kInterleave);
     GMemIterator<EnableActScale, AccessTypeA, 1, Details::kAccessNumA, TypeA> act_scale_iterator(
         smem_act_scale, real_offset_k, 0, 0);    
     
@@ -151,11 +151,11 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
         }
         asm volatile ("cp.async.wait_group 0;\n" ::);
         __syncthreads();
-        act_scale_iterator.load(vec_act_scale, iter);
+        act_scale_iterator.load(vec_act_scale, 0);
 #pragma unroll
         for (int i = 0; i < CtaM; ++i)
         {
-            act_iterator.load(tile_a, iter, i);
+            act_iterator.load(tile_a, 0, i);
             apply_scale<Details, 1, StepK, EnableActScale>(tile_a, vec_act_scale);
             mma<Details, 1, CtaN, StepK, EnableZero, ApplyAlphaInAdvance>(
                 tile_acc + i * CtaN, tile_w_pack2, tile_a, vec_scale);
