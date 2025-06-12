@@ -364,10 +364,13 @@ public:
 #pragma unroll
             for (int jj = 0; jj < Continuous; ++jj)
             {
+                if(iter * step_ + sizeof(TVec) / sizeof(T) * (jj * Threads + threadIdx.x) < stride_)
+                {
                 ldgsts<TVec>(
                     reinterpret_cast<TVec*>(dst)[jj * Threads + threadIdx.x],
-                    reinterpret_cast<TVec*>(addr_ + iter * step_ + ii * stride_) + jj * Threads + threadIdx.x
-                );
+                        reinterpret_cast<TVec*>(addr_ + iter * step_ + ii * stride_) + jj * Threads + threadIdx.x
+                    );
+                }
             }
         }
         asm volatile ("cp.async.commit_group;\n" ::);

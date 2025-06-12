@@ -156,6 +156,7 @@ struct KernelDetails
     using AccessTypeW = typename LayoutDetails::AccessTypeW;
     static constexpr int kWarpSize = 32;
     static constexpr int kStepK = LayoutDetails::kStepK;
+    static constexpr int kStepActK = LayoutDetails::kAccessSize / TypeDetailsA::kElemBits;
     static constexpr int kAccessNumA = kStepK * TypeDetailsA::kElemBits / (sizeof(AccessTypeA) * 8);
     static constexpr int kAccessNumW = kStepK * TypeDetailsW::kElemBits / (sizeof(AccessTypeW) * 8);
     static constexpr int kInterleave = LayoutDetails::kInterleave;

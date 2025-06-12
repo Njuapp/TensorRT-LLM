@@ -46,7 +46,9 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
 
     static constexpr bool Mandatory = true;
     static constexpr int StepK = Details::kStepK;
+    static constexpr int StepActK = Details::kStepActK;
     static constexpr int CtaK = StepK * Threads;
+    static constexpr int CtaActK = CtaK / Details::kInterleave;
     static_assert(CtaN % 2 == 0);
     static_assert(Details::kAccessNumW == 1);
     // static_assert(Details::kAccessNumA == 1 || Details::kAccessNumA == 2 || Details::kAccessNumA == 4);
@@ -83,17 +85,17 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
         (GroupSize != 0 ? real_offset_k / GroupSize * n : 0) + real_offset_n,
         (GroupSize != 0 ? CtaK / Details::kInterleave / GroupSize * n : 0), Details::kInterleave);
 
-    constexpr int NumStages = 1;
-    __shared__ TypeA smem_act[NumStages * CtaM * CtaK / Details::kInterleave];
-    __shared__ TypeA smem_act_scale[NumStages * CtaK / Details::kInterleave];
+    constexpr int NumStages = 2;
+    __shared__ TypeA smem_act[NumStages][CtaM * CtaActK];
+    __shared__ TypeA smem_act_scale[NumStages][CtaActK];
     GmemToSmemIterator<Mandatory, AccessTypeA, Threads, Details::kAccessNumA / Details::kInterleave, TypeA> gmem_act_iterator(
-        act, 0, CtaK / Details::kInterleave, origin_k);
+        act, 0, CtaActK, origin_k);
     GmemToSmemIterator<EnableActScale, AccessTypeA, Threads, Details::kAccessNumA / Details::kInterleave, TypeA> gmem_act_scale_iterator(
-        act_scale, 0, CtaK / Details::kInterleave, 0);
+        act_scale, 0, CtaActK, origin_k);
     GMemIterator<Mandatory, AccessTypeA, CtaM, Details::kAccessNumA, TypeA> act_iterator(
-        smem_act, offset_m * origin_k + real_offset_k, 0, CtaK / Details::kInterleave);
+        smem_act[0], offset_m * origin_k + real_offset_k, CtaM * CtaActK, CtaActK);
     GMemIterator<EnableActScale, AccessTypeA, 1, Details::kAccessNumA, TypeA> act_scale_iterator(
-        smem_act_scale, real_offset_k, 0, 0);    
+        smem_act_scale[0], real_offset_k, CtaActK, 0);    
     
     // SMemIterator<Mandatory, AccessTypeW, CtaN, uint8_t> weight_iterator(weight,
     //     (interleaved_offset_n * interleaved_k + tid * StepK) / Details::kElemsPerByteW, CtaK / Details::kElemsPerByteW,
@@ -114,15 +116,20 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
     TypeA tile_acc[CtaM * CtaN];
     fill<CtaM * CtaN>(tile_acc, static_cast<TypeA>(0.f));
 
-    for (int idx_k = tid * StepK, iter = 0; idx_k < interleaved_k; idx_k += CtaK, ++iter)
+    for (int idx_k = tid * StepK, idx_ldgsts_k = tid * StepActK, iter = 0; idx_k < interleaved_k || idx_ldgsts_k < k; idx_k += CtaK, idx_ldgsts_k += CtaActK, ++iter)
     {
-        __syncthreads();
 #pragma unroll
         for (int i = 0; i < CtaM; ++i)
         {
-            gmem_act_iterator.load(smem_act + i * CtaK, iter, i);
+            gmem_act_iterator.load(smem_act[iter & 0x1] + i * CtaK, iter, i);
         }
-        gmem_act_scale_iterator.load(smem_act_scale, iter);
+        gmem_act_scale_iterator.load(smem_act_scale[iter & 0x1], iter);
+        if (idx_k >= interleaved_k)
+        {
+            asm volatile ("cp.async.wait_group 0;\n" ::);
+            __syncthreads();
+            break;
+        }
         TypeA vec_act_scale[StepK];
         TypeA vec_scale[CtaN], vec_zero[CtaN];
         TypeA tile_a[StepK], tile_w[StepK], tile_w_pack2[CtaN * StepK];
@@ -151,11 +158,11 @@ __global__ void gemv(TypeA* act, TypeA* act_scale, uint8_t* weight, TypeA* scale
         }
         asm volatile ("cp.async.wait_group 0;\n" ::);
         __syncthreads();
-        act_scale_iterator.load(vec_act_scale, 0);
+        act_scale_iterator.load(vec_act_scale, iter & 0x1);
 #pragma unroll
         for (int i = 0; i < CtaM; ++i)
         {
-            act_iterator.load(tile_a, 0, i);
+            act_iterator.load(tile_a, iter & 0x1, i);
             apply_scale<Details, 1, StepK, EnableActScale>(tile_a, vec_act_scale);
             mma<Details, 1, CtaN, StepK, EnableZero, ApplyAlphaInAdvance>(
                 tile_acc + i * CtaN, tile_w_pack2, tile_a, vec_scale);
