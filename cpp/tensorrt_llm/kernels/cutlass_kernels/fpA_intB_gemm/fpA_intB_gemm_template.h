@@ -427,7 +427,7 @@ void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType
             QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size,
             workspace_ptr, workspace_bytes, gemm_config, stream, occupancy);
     }
-    else if ((sm_ >= 80 && sm_ < 89) || sm_ >= 100)
+    else if ((sm_ >= 80 && sm_ < 89) || (sm_ >= 120))
     {
         dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, cutlass::arch::Sm80,
             QuantOp, EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size,
@@ -453,6 +453,12 @@ void CutlassFpAIntBGemmRunner<ActivationType, WeightType, QuantOp, ScaleZeroType
                 || cutlass::platform::is_same<ScaleZeroType, half>::value,
             "ScaleZeroType must be half for activation=fp8");
         sm90_dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, QuantOp,
+            EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, workspace_ptr,
+            workspace_bytes, gemm_config, stream, occupancy);
+    }
+    else if (sm_ >= 100 && sm_ < 120)
+    {
+        sm100_dispatch_gemm_to_cutlass<ActivationType, WeightType, ScaleZeroType, BiasType, OutputType, QuantOp,
             EpilogueTag>(A, B, weight_scales, weight_zero_points, biases, alpha, C, m, n, k, group_size, workspace_ptr,
             workspace_bytes, gemm_config, stream, occupancy);
     }
